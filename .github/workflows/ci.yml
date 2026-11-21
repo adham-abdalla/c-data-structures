@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Tests (${{ matrix.cc }}, ASan + UBSan)
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - run: make test CC=${{ matrix.cc }} SANITIZE="-fsanitize=address,undefined -fno-omit-frame-pointer"
+
+  valgrind:
+    name: Valgrind (no sanitizers, leak check)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq valgrind
+      - run: make build/test_ds build/top_talkers
+      - run: valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=all ./build/test_ds
+      - run: valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=all ./build/top_talkers 3 < tests/traffic.csv
+
+  windows:
+    name: Windows (MinGW gcc)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run the tests
+        run: |
+          gcc -std=c11 -D__USE_MINGW_ANSI_STDIO=1 -O2 -Wall -Wextra -Werror -Iinclude src/vec_ring_heap.c src/map_lru.c tests/test_ds.c -o test_ds.exe
+          ./test_ds.exe
+
+  quality:
+    name: Mutation check, coverage, fuzzing
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every planted bug must be caught by the tests
+        run: set -o pipefail; make mutants | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Line coverage
+        run: make coverage | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: libFuzzer, 60 seconds
+        run: make fuzz
+
+  bench:
+    name: Benchmarks
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: make bench | tee -a "$GITHUB_STEP_SUMMARY"
